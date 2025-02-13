@@ -1,61 +1,57 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { CreateCouponInput, CouponType } from '@/types';
+import { validateCouponInput, normalizeCode } from '@/lib/validation';
+import { CouponType, CouponStatus } from '@/types';
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '10');
-    const status = searchParams.get('status');
+    const status = searchParams.get('status') as CouponStatus | null;
     const search = searchParams.get('search');
+    const page = parseInt(searchParams.get('page') || '1', 10);
+    const limit = parseInt(searchParams.get('limit') || '20', 10);
 
-    const skip = (page - 1) * limit;
+    // Validate pagination
+    const validPage = Math.max(1, page);
+    const validLimit = Math.min(Math.max(1, limit), 100);
+    const skip = (validPage - 1) * validLimit;
 
     const where: any = {};
 
-    if (status === 'active') {
-      where.isActive = true;
-      where.OR = [
-        { expiresAt: null },
-        { expiresAt: { gt: new Date() } }
-      ];
-    } else if (status === 'expired') {
-      where.expiresAt = { lt: new Date() };
-    } else if (status === 'inactive') {
-      where.isActive = false;
+    if (status) {
+      where.status = status;
     }
 
     if (search) {
       where.OR = [
         { code: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } }
+        { description: { contains: search, mode: 'insensitive' } },
       ];
     }
 
     const [coupons, total] = await Promise.all([
       prisma.coupon.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
         include: {
           _count: {
-            select: { redemptions: true }
-          }
-        }
+            select: { redemptions: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: validLimit,
       }),
-      prisma.coupon.count({ where })
+      prisma.coupon.count({ where }),
     ]);
 
     return NextResponse.json({
       coupons,
       pagination: {
-        page,
-        limit,
+        page: validPage,
+        limit: validLimit,
         total,
-        totalPages: Math.ceil(total / limit)
-      }
+        totalPages: Math.ceil(total / validLimit),
+      },
     });
   } catch (error) {
     console.error('Error fetching coupons:', error);
@@ -68,69 +64,76 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body: CreateCouponInput = await request.json();
+    const body = await request.json();
 
-    // Validate required fields
-    if (!body.code || !body.type || body.value === undefined) {
+    // Validate input
+    const validation = validateCouponInput({
+      code: body.code,
+      type: body.type,
+      value: body.value,
+      minimumPurchase: body.minimumPurchase,
+      maxDiscount: body.maxDiscount,
+      maxRedemptions: body.maxRedemptions,
+      maxRedemptionsPerCustomer: body.maxRedemptionsPerCustomer,
+      startsAt: body.startsAt,
+      expiresAt: body.expiresAt,
+    });
+
+    if (!validation.valid) {
       return NextResponse.json(
-        { error: 'Code, type, and value are required' },
+        { error: 'Validation failed', details: validation.errors },
         { status: 400 }
       );
     }
 
-    // Validate coupon type
-    if (!['PERCENTAGE', 'FIXED_AMOUNT'].includes(body.type)) {
-      return NextResponse.json(
-        { error: 'Invalid coupon type' },
-        { status: 400 }
-      );
-    }
-
-    // Validate percentage value
-    if (body.type === 'PERCENTAGE' && (body.value < 0 || body.value > 100)) {
-      return NextResponse.json(
-        { error: 'Percentage value must be between 0 and 100' },
-        { status: 400 }
-      );
-    }
-
-    // Validate fixed amount
-    if (body.type === 'FIXED_AMOUNT' && body.value < 0) {
-      return NextResponse.json(
-        { error: 'Fixed amount must be positive' },
-        { status: 400 }
-      );
-    }
+    // Normalize the code
+    const normalizedCode = normalizeCode(body.code);
 
     // Check for duplicate code
-    const existingCoupon = await prisma.coupon.findUnique({
-      where: { code: body.code.toUpperCase() }
+    const existingCoupon = await prisma.coupon.findFirst({
+      where: {
+        code: {
+          equals: normalizedCode,
+          mode: 'insensitive',
+        },
+      },
     });
 
     if (existingCoupon) {
       return NextResponse.json(
-        { error: 'Coupon code already exists' },
+        { error: 'A coupon with this code already exists' },
         { status: 409 }
       );
     }
 
+    // Create the coupon
     const coupon = await prisma.coupon.create({
       data: {
-        code: body.code.toUpperCase(),
-        description: body.description,
-        type: body.type as CouponType,
+        code: normalizedCode,
+        type: body.type,
         value: body.value,
-        minPurchaseAmount: body.minPurchaseAmount,
-        maxUsageCount: body.maxUsageCount,
-        maxUsagePerCustomer: body.maxUsagePerCustomer,
+        description: body.description || null,
+        minimumPurchase: body.minimumPurchase || null,
+        maxDiscount: body.maxDiscount || null,
+        maxRedemptions: body.maxRedemptions || null,
+        maxRedemptionsPerCustomer: body.maxRedemptionsPerCustomer || null,
+        startsAt: body.startsAt ? new Date(body.startsAt) : null,
         expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
-        isActive: body.isActive ?? true
-      }
+        status: 'ACTIVE',
+      },
     });
 
     return NextResponse.json(coupon, { status: 201 });
   } catch (error) {
     console.error('Error creating coupon:', error);
+    
+    if (error instanceof SyntaxError) {
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
     return NextResponse.json(
       { error: 'Failed to create coupon' },
       { status: 500 }
