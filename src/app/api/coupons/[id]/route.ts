@@ -1,31 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { UpdateCouponInput } from '@/types';
+import { couponService } from '@/services/coupon.service';
+
+interface RouteParams {
+  params: { id: string };
+}
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: RouteParams
 ) {
   try {
-    const coupon = await prisma.coupon.findUnique({
-      where: { id: params.id },
-      include: {
-        _count: {
-          select: { redemptions: true }
-        },
-        redemptions: {
-          take: 10,
-          orderBy: { createdAt: 'desc' },
-          select: {
-            id: true,
-            customerEmail: true,
-            orderAmount: true,
-            discountAmount: true,
-            createdAt: true
-          }
-        }
-      }
-    });
+    const coupon = await couponService.findById(params.id);
 
     if (!coupon) {
       return NextResponse.json(
@@ -46,63 +31,29 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: RouteParams
 ) {
   try {
-    const body: UpdateCouponInput = await request.json();
+    const body = await request.json();
 
-    // Check if coupon exists
-    const existingCoupon = await prisma.coupon.findUnique({
-      where: { id: params.id }
+    const result = await couponService.update(params.id, {
+      description: body.description,
+      type: body.type,
+      value: body.value,
+      minPurchase: body.minPurchase,
+      maxUses: body.maxUses,
+      expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
+      status: body.status,
     });
 
-    if (!existingCoupon) {
+    if (result.error) {
       return NextResponse.json(
-        { error: 'Coupon not found' },
-        { status: 404 }
+        { error: result.error },
+        { status: result.error === 'Coupon not found' ? 404 : 400 }
       );
     }
 
-    // Validate percentage value if updating
-    if (body.type === 'PERCENTAGE' && body.value !== undefined) {
-      if (body.value < 0 || body.value > 100) {
-        return NextResponse.json(
-          { error: 'Percentage value must be between 0 and 100' },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Check for duplicate code if updating code
-    if (body.code && body.code !== existingCoupon.code) {
-      const duplicateCoupon = await prisma.coupon.findUnique({
-        where: { code: body.code.toUpperCase() }
-      });
-
-      if (duplicateCoupon) {
-        return NextResponse.json(
-          { error: 'Coupon code already exists' },
-          { status: 409 }
-        );
-      }
-    }
-
-    const updatedCoupon = await prisma.coupon.update({
-      where: { id: params.id },
-      data: {
-        ...(body.code && { code: body.code.toUpperCase() }),
-        ...(body.description !== undefined && { description: body.description }),
-        ...(body.type && { type: body.type }),
-        ...(body.value !== undefined && { value: body.value }),
-        ...(body.minPurchaseAmount !== undefined && { minPurchaseAmount: body.minPurchaseAmount }),
-        ...(body.maxUsageCount !== undefined && { maxUsageCount: body.maxUsageCount }),
-        ...(body.maxUsagePerCustomer !== undefined && { maxUsagePerCustomer: body.maxUsagePerCustomer }),
-        ...(body.expiresAt !== undefined && { expiresAt: body.expiresAt ? new Date(body.expiresAt) : null }),
-        ...(body.isActive !== undefined && { isActive: body.isActive })
-      }
-    });
-
-    return NextResponse.json(updatedCoupon);
+    return NextResponse.json(result.coupon);
   } catch (error) {
     console.error('Error updating coupon:', error);
     return NextResponse.json(
@@ -114,45 +65,19 @@ export async function PATCH(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: RouteParams
 ) {
   try {
-    const coupon = await prisma.coupon.findUnique({
-      where: { id: params.id },
-      include: {
-        _count: {
-          select: { redemptions: true }
-        }
-      }
-    });
+    const result = await couponService.delete(params.id);
 
-    if (!coupon) {
+    if (!result.success) {
       return NextResponse.json(
-        { error: 'Coupon not found' },
+        { error: result.error },
         { status: 404 }
       );
     }
 
-    // Soft delete if coupon has redemptions
-    if (coupon._count.redemptions > 0) {
-      await prisma.coupon.update({
-        where: { id: params.id },
-        data: { isActive: false }
-      });
-
-      return NextResponse.json({
-        message: 'Coupon deactivated (has redemption history)'
-      });
-    }
-
-    // Hard delete if no redemptions
-    await prisma.coupon.delete({
-      where: { id: params.id }
-    });
-
-    return NextResponse.json({
-      message: 'Coupon deleted successfully'
-    });
+    return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting coupon:', error);
     return NextResponse.json(

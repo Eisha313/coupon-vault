@@ -1,57 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { validateCouponInput, normalizeCode } from '@/lib/validation';
-import { CouponType, CouponStatus } from '@/types';
+import { couponService } from '@/services/coupon.service';
+import { CouponStatus } from '@/types';
 
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
+    const searchParams = request.nextUrl.searchParams;
     const status = searchParams.get('status') as CouponStatus | null;
-    const search = searchParams.get('search');
-    const page = parseInt(searchParams.get('page') || '1', 10);
-    const limit = parseInt(searchParams.get('limit') || '20', 10);
+    const limit = parseInt(searchParams.get('limit') || '50', 10);
+    const offset = parseInt(searchParams.get('offset') || '0', 10);
 
-    // Validate pagination
-    const validPage = Math.max(1, page);
-    const validLimit = Math.min(Math.max(1, limit), 100);
-    const skip = (validPage - 1) * validLimit;
-
-    const where: any = {};
-
-    if (status) {
-      where.status = status;
-    }
-
-    if (search) {
-      where.OR = [
-        { code: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    const [coupons, total] = await Promise.all([
-      prisma.coupon.findMany({
-        where,
-        include: {
-          _count: {
-            select: { redemptions: true },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: validLimit,
-      }),
-      prisma.coupon.count({ where }),
-    ]);
+    const { coupons, total } = await couponService.findAll({
+      status: status || undefined,
+      limit,
+      offset,
+    });
 
     return NextResponse.json({
       coupons,
-      pagination: {
-        page: validPage,
-        limit: validLimit,
-        total,
-        totalPages: Math.ceil(total / validLimit),
-      },
+      total,
+      limit,
+      offset,
     });
   } catch (error) {
     console.error('Error fetching coupons:', error);
@@ -66,74 +34,23 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // Validate input
-    const validation = validateCouponInput({
+    const result = await couponService.create({
       code: body.code,
+      description: body.description,
       type: body.type,
       value: body.value,
-      minimumPurchase: body.minimumPurchase,
-      maxDiscount: body.maxDiscount,
-      maxRedemptions: body.maxRedemptions,
-      maxRedemptionsPerCustomer: body.maxRedemptionsPerCustomer,
-      startsAt: body.startsAt,
-      expiresAt: body.expiresAt,
+      minPurchase: body.minPurchase,
+      maxUses: body.maxUses,
+      expiresAt: body.expiresAt ? new Date(body.expiresAt) : undefined,
     });
 
-    if (!validation.valid) {
-      return NextResponse.json(
-        { error: 'Validation failed', details: validation.errors },
-        { status: 400 }
-      );
+    if (result.error) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
     }
 
-    // Normalize the code
-    const normalizedCode = normalizeCode(body.code);
-
-    // Check for duplicate code
-    const existingCoupon = await prisma.coupon.findFirst({
-      where: {
-        code: {
-          equals: normalizedCode,
-          mode: 'insensitive',
-        },
-      },
-    });
-
-    if (existingCoupon) {
-      return NextResponse.json(
-        { error: 'A coupon with this code already exists' },
-        { status: 409 }
-      );
-    }
-
-    // Create the coupon
-    const coupon = await prisma.coupon.create({
-      data: {
-        code: normalizedCode,
-        type: body.type,
-        value: body.value,
-        description: body.description || null,
-        minimumPurchase: body.minimumPurchase || null,
-        maxDiscount: body.maxDiscount || null,
-        maxRedemptions: body.maxRedemptions || null,
-        maxRedemptionsPerCustomer: body.maxRedemptionsPerCustomer || null,
-        startsAt: body.startsAt ? new Date(body.startsAt) : null,
-        expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
-        status: 'ACTIVE',
-      },
-    });
-
-    return NextResponse.json(coupon, { status: 201 });
+    return NextResponse.json(result.coupon, { status: 201 });
   } catch (error) {
     console.error('Error creating coupon:', error);
-    
-    if (error instanceof SyntaxError) {
-      return NextResponse.json(
-        { error: 'Invalid JSON in request body' },
-        { status: 400 }
-      );
-    }
-
     return NextResponse.json(
       { error: 'Failed to create coupon' },
       { status: 500 }
