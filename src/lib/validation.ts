@@ -1,138 +1,150 @@
 import { CouponType } from '@/types';
 
-export interface CouponValidationInput {
-  code: string;
-  type: CouponType;
-  value: number;
-  minimumPurchase?: number | null;
-  maxDiscount?: number | null;
-  maxRedemptions?: number | null;
-  maxRedemptionsPerCustomer?: number | null;
-  startsAt?: Date | null;
-  expiresAt?: Date | null;
-}
-
 export interface ValidationResult {
   valid: boolean;
-  errors: Record<string, string>;
+  errors: string[];
 }
 
-export function validateCouponInput(input: CouponValidationInput): ValidationResult {
-  const errors: Record<string, string> = {};
+export function validateCouponInput(data: {
+  code?: string;
+  type?: CouponType;
+  value?: number;
+  minPurchase?: number;
+  maxUses?: number;
+  expiresAt?: Date | string;
+}): ValidationResult {
+  const errors: string[] = [];
 
-  // Validate code
-  if (!input.code || typeof input.code !== 'string') {
-    errors.code = 'Coupon code is required';
+  // Code validation
+  if (!data.code) {
+    errors.push('Coupon code is required');
+  } else if (typeof data.code !== 'string') {
+    errors.push('Coupon code must be a string');
   } else {
-    const trimmedCode = input.code.trim();
+    const trimmedCode = data.code.trim();
     if (trimmedCode.length < 3) {
-      errors.code = 'Coupon code must be at least 3 characters';
-    } else if (trimmedCode.length > 50) {
-      errors.code = 'Coupon code must be less than 50 characters';
-    } else if (!/^[A-Za-z0-9_-]+$/.test(trimmedCode)) {
-      errors.code = 'Coupon code can only contain letters, numbers, hyphens, and underscores';
+      errors.push('Coupon code must be at least 3 characters');
+    }
+    if (trimmedCode.length > 50) {
+      errors.push('Coupon code must be at most 50 characters');
+    }
+    if (!/^[A-Za-z0-9_-]+$/.test(trimmedCode)) {
+      errors.push('Coupon code can only contain letters, numbers, hyphens, and underscores');
     }
   }
 
-  // Validate type
-  const validTypes: CouponType[] = ['PERCENTAGE', 'FIXED_AMOUNT', 'FREE_SHIPPING'];
-  if (!input.type || !validTypes.includes(input.type)) {
-    errors.type = 'Invalid coupon type';
+  // Type validation
+  if (!data.type) {
+    errors.push('Coupon type is required');
+  } else if (!['percentage', 'fixed'].includes(data.type)) {
+    errors.push('Coupon type must be "percentage" or "fixed"');
   }
 
-  // Validate value
-  if (typeof input.value !== 'number' || isNaN(input.value)) {
-    errors.value = 'Discount value is required';
-  } else if (input.value < 0) {
-    errors.value = 'Discount value cannot be negative';
-  } else if (input.type === 'PERCENTAGE' && input.value > 100) {
-    errors.value = 'Percentage discount cannot exceed 100%';
-  } else if (input.type === 'FIXED_AMOUNT' && input.value > 10000) {
-    errors.value = 'Fixed amount discount cannot exceed $10,000';
-  }
-
-  // Validate minimumPurchase
-  if (input.minimumPurchase !== undefined && input.minimumPurchase !== null) {
-    if (typeof input.minimumPurchase !== 'number' || isNaN(input.minimumPurchase)) {
-      errors.minimumPurchase = 'Invalid minimum purchase amount';
-    } else if (input.minimumPurchase < 0) {
-      errors.minimumPurchase = 'Minimum purchase cannot be negative';
+  // Value validation
+  if (data.value === undefined || data.value === null) {
+    errors.push('Coupon value is required');
+  } else if (typeof data.value !== 'number' || isNaN(data.value)) {
+    errors.push('Coupon value must be a valid number');
+  } else if (data.value < 0) {
+    errors.push('Coupon value cannot be negative');
+  } else if (data.type === 'percentage') {
+    if (data.value > 100) {
+      errors.push('Percentage discount cannot exceed 100%');
+    }
+    if (data.value === 0) {
+      errors.push('Percentage discount must be greater than 0');
+    }
+  } else if (data.type === 'fixed') {
+    if (data.value === 0) {
+      errors.push('Fixed discount must be greater than 0');
+    }
+    if (data.value > 10000) {
+      errors.push('Fixed discount cannot exceed $10,000');
     }
   }
 
-  // Validate maxDiscount
-  if (input.maxDiscount !== undefined && input.maxDiscount !== null) {
-    if (typeof input.maxDiscount !== 'number' || isNaN(input.maxDiscount)) {
-      errors.maxDiscount = 'Invalid maximum discount amount';
-    } else if (input.maxDiscount < 0) {
-      errors.maxDiscount = 'Maximum discount cannot be negative';
+  // Min purchase validation
+  if (data.minPurchase !== undefined && data.minPurchase !== null) {
+    if (typeof data.minPurchase !== 'number' || isNaN(data.minPurchase)) {
+      errors.push('Minimum purchase must be a valid number');
+    } else if (data.minPurchase < 0) {
+      errors.push('Minimum purchase cannot be negative');
     }
   }
 
-  // Validate maxRedemptions
-  if (input.maxRedemptions !== undefined && input.maxRedemptions !== null) {
-    if (!Number.isInteger(input.maxRedemptions)) {
-      errors.maxRedemptions = 'Maximum redemptions must be a whole number';
-    } else if (input.maxRedemptions < 1) {
-      errors.maxRedemptions = 'Maximum redemptions must be at least 1';
+  // Max uses validation
+  if (data.maxUses !== undefined && data.maxUses !== null) {
+    if (typeof data.maxUses !== 'number' || isNaN(data.maxUses)) {
+      errors.push('Maximum uses must be a valid number');
+    } else if (!Number.isInteger(data.maxUses)) {
+      errors.push('Maximum uses must be a whole number');
+    } else if (data.maxUses < 1) {
+      errors.push('Maximum uses must be at least 1');
     }
   }
 
-  // Validate maxRedemptionsPerCustomer
-  if (input.maxRedemptionsPerCustomer !== undefined && input.maxRedemptionsPerCustomer !== null) {
-    if (!Number.isInteger(input.maxRedemptionsPerCustomer)) {
-      errors.maxRedemptionsPerCustomer = 'Per-customer limit must be a whole number';
-    } else if (input.maxRedemptionsPerCustomer < 1) {
-      errors.maxRedemptionsPerCustomer = 'Per-customer limit must be at least 1';
-    }
-  }
-
-  // Validate date range
-  if (input.startsAt && input.expiresAt) {
-    const startDate = new Date(input.startsAt);
-    const endDate = new Date(input.expiresAt);
+  // Expiration date validation
+  if (data.expiresAt !== undefined && data.expiresAt !== null) {
+    let expirationDate: Date;
     
-    if (isNaN(startDate.getTime())) {
-      errors.startsAt = 'Invalid start date';
+    if (data.expiresAt instanceof Date) {
+      expirationDate = data.expiresAt;
+    } else if (typeof data.expiresAt === 'string') {
+      expirationDate = new Date(data.expiresAt);
+    } else {
+      errors.push('Expiration date must be a valid date');
+      return { valid: errors.length === 0, errors };
     }
-    if (isNaN(endDate.getTime())) {
-      errors.expiresAt = 'Invalid expiration date';
-    }
-    if (startDate >= endDate) {
-      errors.expiresAt = 'Expiration date must be after start date';
+
+    if (isNaN(expirationDate.getTime())) {
+      errors.push('Expiration date must be a valid date');
+    } else if (expirationDate <= new Date()) {
+      errors.push('Expiration date must be in the future');
     }
   }
 
   return {
-    valid: Object.keys(errors).length === 0,
+    valid: errors.length === 0,
     errors,
   };
 }
 
-export function normalizeCode(code: string): string {
-  return code.trim().toUpperCase().replace(/\s+/g, '-');
-}
-
-export function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount);
-}
-
-export function formatPercentage(value: number): string {
-  return `${value}%`;
-}
-
-export function formatDiscountValue(type: CouponType, value: number): string {
-  switch (type) {
-    case 'PERCENTAGE':
-      return formatPercentage(value);
-    case 'FIXED_AMOUNT':
-      return formatCurrency(value);
-    case 'FREE_SHIPPING':
-      return 'Free Shipping';
-    default:
-      return String(value);
+export function validateEmail(email: string): boolean {
+  if (!email || typeof email !== 'string') {
+    return false;
   }
+  
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email.trim());
+}
+
+export function validateOrderId(orderId: string): boolean {
+  if (!orderId || typeof orderId !== 'string') {
+    return false;
+  }
+  
+  const trimmed = orderId.trim();
+  return trimmed.length >= 1 && trimmed.length <= 255;
+}
+
+export function sanitizeCode(code: string): string {
+  if (!code || typeof code !== 'string') {
+    return '';
+  }
+  
+  return code.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+}
+
+export function parseNumericValue(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value));
+  
+  if (isNaN(parsed)) {
+    return null;
+  }
+  
+  return parsed;
 }
