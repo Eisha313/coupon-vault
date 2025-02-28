@@ -7,82 +7,72 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Coupon {
-  id              String      @id @default(cuid())
-  code            String      @unique
-  description     String?
-  discountType    DiscountType
-  discountValue   Float
-  minimumPurchase Float?      @default(0)
-  maxDiscount     Float?
-  usageLimit      Int?
-  usageCount      Int         @default(0)
-  perUserLimit    Int?        @default(1)
-  isActive        Boolean     @default(true)
-  startsAt        DateTime?   @default(now())
-  expiresAt       DateTime?
-  stripeId        String?     @unique
-  metadata        Json?
-  requiresEmail   Boolean     @default(false)
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
 
-  redemptions     Redemption[]
-  emailCaptures   EmailCapture[]
-  claims          CouponClaim[]
+enum CouponStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  DEPLETED
+}
+
+model Coupon {
+  id                String       @id @default(cuid())
+  code              String       @unique
+  description       String?
+  discountType      DiscountType
+  discountValue     Float
+  minimumPurchase   Float?       @default(0)
+  maxRedemptions    Int?
+  currentRedemptions Int         @default(0)
+  startDate         DateTime     @default(now())
+  endDate           DateTime?
+  status            CouponStatus @default(ACTIVE)
+  stripePromotionId String?
+  stripeCouponId    String?
+  metadata          Json?        @default("{}")
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  redemptions  Redemption[]
+  emailCaptures EmailCapture[]
 
   @@index([code])
-  @@index([isActive])
-  @@index([stripeId])
+  @@index([status])
+  @@index([startDate, endDate])
 }
 
 model Redemption {
-  id            String   @id @default(cuid())
-  couponId      String
-  coupon        Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
-  orderId       String?
-  customerId    String?
-  customerEmail String?
-  orderTotal    Float?
-  discountAmount Float?
+  id              String   @id @default(cuid())
+  couponId        String
+  coupon          Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  orderId         String?
+  customerEmail   String?
+  discountApplied Float
+  orderTotal      Float?
   stripePaymentId String?
-  redeemedAt    DateTime @default(now())
-  metadata      Json?
+  metadata        Json?    @default("{}")
+  redeemedAt      DateTime @default(now())
 
   @@index([couponId])
-  @@index([customerId])
   @@index([redeemedAt])
+  @@index([customerEmail])
 }
 
 model EmailCapture {
-  id          String   @id @default(cuid())
-  email       String
-  couponId    String
-  coupon      Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
-  source      String   @default("share_link")
-  ipAddress   String?
-  userAgent   String?
-  capturedAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  email     String
+  couponId  String
+  coupon    Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  source    String   @default("share_page")
+  metadata  Json?    @default("{}")
+  createdAt DateTime @default(now())
 
+  @@unique([email, couponId])
   @@index([couponId])
   @@index([email])
-  @@index([capturedAt])
-}
-
-model CouponClaim {
-  id          String   @id @default(cuid())
-  couponId    String
-  coupon      Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
-  email       String?
-  claimToken  String   @unique
-  claimedAt   DateTime @default(now())
-  redeemedAt  DateTime?
-
-  @@index([couponId])
-  @@index([claimToken])
-}
-
-enum DiscountType {
-  percentage
-  fixed
+  @@index([createdAt])
 }
