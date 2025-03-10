@@ -1,276 +1,286 @@
 import { prisma } from '@/lib/prisma';
-import { Prisma } from '@prisma/client';
-
-export interface CreateCouponInput {
-  code: string;
-  description?: string;
-  discountType: 'PERCENTAGE' | 'FIXED_AMOUNT';
-  discountValue: number;
-  minPurchaseAmount?: number;
-  maxDiscountAmount?: number;
-  maxRedemptions?: number;
-  maxRedemptionsPerCustomer?: number;
-  startsAt?: Date;
-  expiresAt?: Date;
-  isActive?: boolean;
-}
-
-export interface UpdateCouponInput extends Partial<CreateCouponInput> {
-  id: string;
-}
+import { CreateCouponInput, UpdateCouponInput } from '@/lib/validation';
+import { Coupon, CouponType } from '@/types';
 
 export class CouponService {
-  static async create(input: CreateCouponInput) {
-    // Normalize code to uppercase and trim
-    const normalizedCode = input.code.trim().toUpperCase();
-    
-    // Validate code format
-    if (!/^[A-Z0-9_-]+$/.test(normalizedCode)) {
-      throw new Error('Coupon code can only contain letters, numbers, underscores, and hyphens');
-    }
-
-    if (normalizedCode.length < 3 || normalizedCode.length > 50) {
-      throw new Error('Coupon code must be between 3 and 50 characters');
-    }
-
-    // Validate discount value
-    if (input.discountValue <= 0) {
-      throw new Error('Discount value must be greater than 0');
-    }
-
-    if (input.discountType === 'PERCENTAGE' && input.discountValue > 100) {
-      throw new Error('Percentage discount cannot exceed 100%');
-    }
-
-    // Validate dates
-    if (input.startsAt && input.expiresAt && input.startsAt >= input.expiresAt) {
-      throw new Error('Start date must be before expiration date');
-    }
-
-    // Check for duplicate code
-    const existingCoupon = await prisma.coupon.findUnique({
-      where: { code: normalizedCode }
-    });
-
-    if (existingCoupon) {
-      throw new Error('A coupon with this code already exists');
-    }
-
-    return prisma.coupon.create({
-      data: {
-        ...input,
-        code: normalizedCode,
-        minPurchaseAmount: input.minPurchaseAmount ?? null,
-        maxDiscountAmount: input.maxDiscountAmount ?? null,
-        maxRedemptions: input.maxRedemptions ?? null,
-        maxRedemptionsPerCustomer: input.maxRedemptionsPerCustomer ?? null,
-        isActive: input.isActive ?? true
-      }
-    });
-  }
-
-  static async update(input: UpdateCouponInput) {
-    const { id, ...data } = input;
-
-    // Check if coupon exists
-    const existingCoupon = await prisma.coupon.findUnique({
-      where: { id }
-    });
-
-    if (!existingCoupon) {
-      throw new Error('Coupon not found');
-    }
-
-    // If updating code, validate and check for duplicates
-    if (data.code) {
-      const normalizedCode = data.code.trim().toUpperCase();
-      
-      if (!/^[A-Z0-9_-]+$/.test(normalizedCode)) {
-        throw new Error('Coupon code can only contain letters, numbers, underscores, and hyphens');
-      }
-
-      if (normalizedCode !== existingCoupon.code) {
-        const duplicateCoupon = await prisma.coupon.findUnique({
-          where: { code: normalizedCode }
-        });
-
-        if (duplicateCoupon) {
-          throw new Error('A coupon with this code already exists');
-        }
-      }
-
-      data.code = normalizedCode;
-    }
-
-    // Validate discount value if provided
-    if (data.discountValue !== undefined && data.discountValue <= 0) {
-      throw new Error('Discount value must be greater than 0');
-    }
-
-    const discountType = data.discountType ?? existingCoupon.discountType;
-    const discountValue = data.discountValue ?? existingCoupon.discountValue;
-
-    if (discountType === 'PERCENTAGE' && discountValue > 100) {
-      throw new Error('Percentage discount cannot exceed 100%');
-    }
-
-    // Validate dates
-    const startsAt = data.startsAt ?? existingCoupon.startsAt;
-    const expiresAt = data.expiresAt ?? existingCoupon.expiresAt;
-
-    if (startsAt && expiresAt && new Date(startsAt) >= new Date(expiresAt)) {
-      throw new Error('Start date must be before expiration date');
-    }
-
-    return prisma.coupon.update({
-      where: { id },
-      data
-    });
-  }
-
-  static async delete(id: string) {
-    // Check if coupon exists
-    const existingCoupon = await prisma.coupon.findUnique({
-      where: { id },
-      include: { redemptions: { take: 1 } }
-    });
-
-    if (!existingCoupon) {
-      throw new Error('Coupon not found');
-    }
-
-    // Soft delete if coupon has redemptions
-    if (existingCoupon.redemptions.length > 0) {
-      return prisma.coupon.update({
-        where: { id },
-        data: { isActive: false }
-      });
-    }
-
-    // Hard delete if no redemptions
-    return prisma.coupon.delete({
-      where: { id }
-    });
-  }
-
-  static async getById(id: string) {
-    const coupon = await prisma.coupon.findUnique({
-      where: { id },
-      include: {
-        redemptions: {
-          take: 100,
-          orderBy: { createdAt: 'desc' }
-        },
-        _count: {
-          select: { redemptions: true }
-        }
-      }
-    });
-
-    if (!coupon) {
-      throw new Error('Coupon not found');
-    }
-
-    return coupon;
-  }
-
-  static async list(options: {
-    page?: number;
-    limit?: number;
-    search?: string;
+  static async findAll(options?: {
     isActive?: boolean;
-    discountType?: 'PERCENTAGE' | 'FIXED_AMOUNT';
-  } = {}) {
-    const { page = 1, limit = 20, search, isActive, discountType } = options;
-    const skip = (page - 1) * limit;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const { isActive, search, limit = 50, offset = 0 } = options || {};
 
-    const where: Prisma.CouponWhereInput = {};
+    const where: Record<string, unknown> = {};
 
-    if (search) {
-      where.OR = [
-        { code: { contains: search, mode: 'insensitive' } },
-        { description: { contains: search, mode: 'insensitive' } }
-      ];
-    }
-
-    if (isActive !== undefined) {
+    if (typeof isActive === 'boolean') {
       where.isActive = isActive;
     }
 
-    if (discountType) {
-      where.discountType = discountType;
+    if (search && search.trim()) {
+      where.OR = [
+        { code: { contains: search.trim(), mode: 'insensitive' } },
+        { description: { contains: search.trim(), mode: 'insensitive' } },
+      ];
     }
 
     const [coupons, total] = await Promise.all([
       prisma.coupon.findMany({
         where,
-        skip,
-        take: limit,
         orderBy: { createdAt: 'desc' },
+        take: Math.min(limit, 100),
+        skip: offset,
         include: {
           _count: {
-            select: { redemptions: true }
-          }
-        }
+            select: { redemptions: true },
+          },
+        },
       }),
-      prisma.coupon.count({ where })
+      prisma.coupon.count({ where }),
     ]);
 
-    return {
-      coupons,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit)
-      }
-    };
+    return { coupons, total };
   }
 
-  static async recordRedemption(couponId: string, data: {
-    orderId?: string;
-    customerId?: string;
-    customerEmail?: string;
-    orderTotal: number;
-    discountAmount: number;
-  }) {
-    const coupon = await prisma.coupon.findUnique({
-      where: { id: couponId }
-    });
+  static async findById(id: string) {
+    if (!id || typeof id !== 'string') {
+      return null;
+    }
 
-    if (!coupon) {
+    return prisma.coupon.findUnique({
+      where: { id },
+      include: {
+        redemptions: {
+          orderBy: { redeemedAt: 'desc' },
+          take: 50,
+        },
+        _count: {
+          select: { redemptions: true },
+        },
+      },
+    });
+  }
+
+  static async findByCode(code: string) {
+    if (!code || typeof code !== 'string') {
+      return null;
+    }
+
+    const normalizedCode = code.toUpperCase().trim();
+    if (!normalizedCode) {
+      return null;
+    }
+
+    return prisma.coupon.findUnique({
+      where: { code: normalizedCode },
+      include: {
+        _count: {
+          select: { redemptions: true },
+        },
+      },
+    });
+  }
+
+  static async create(data: CreateCouponInput) {
+    const existingCoupon = await this.findByCode(data.code);
+    if (existingCoupon) {
+      throw new Error(`Coupon with code "${data.code}" already exists`);
+    }
+
+    return prisma.coupon.create({
+      data: {
+        code: data.code.toUpperCase().trim(),
+        type: data.type,
+        value: data.value,
+        minPurchase: data.minPurchase ?? null,
+        maxUses: data.maxUses ?? null,
+        maxUsesPerCustomer: data.maxUsesPerCustomer ?? null,
+        expiresAt: data.expiresAt ?? null,
+        isActive: data.isActive ?? true,
+        description: data.description ?? null,
+      },
+    });
+  }
+
+  static async update(id: string, data: UpdateCouponInput) {
+    if (!id || typeof id !== 'string') {
+      throw new Error('Invalid coupon ID');
+    }
+
+    const existingCoupon = await this.findById(id);
+    if (!existingCoupon) {
       throw new Error('Coupon not found');
     }
 
-    if (!coupon.isActive) {
-      throw new Error('Coupon is not active');
+    return prisma.coupon.update({
+      where: { id },
+      data: {
+        ...(data.type !== undefined && { type: data.type }),
+        ...(data.value !== undefined && { value: data.value }),
+        ...(data.minPurchase !== undefined && { minPurchase: data.minPurchase }),
+        ...(data.maxUses !== undefined && { maxUses: data.maxUses }),
+        ...(data.maxUsesPerCustomer !== undefined && { maxUsesPerCustomer: data.maxUsesPerCustomer }),
+        ...(data.expiresAt !== undefined && { expiresAt: data.expiresAt }),
+        ...(data.isActive !== undefined && { isActive: data.isActive }),
+        ...(data.description !== undefined && { description: data.description }),
+      },
+    });
+  }
+
+  static async delete(id: string) {
+    if (!id || typeof id !== 'string') {
+      throw new Error('Invalid coupon ID');
     }
 
-    // Use transaction to ensure atomicity
-    return prisma.$transaction(async (tx) => {
-      // Create redemption record
-      const redemption = await tx.redemption.create({
-        data: {
-          couponId,
-          orderId: data.orderId ?? null,
-          customerId: data.customerId ?? null,
-          customerEmail: data.customerEmail ?? null,
-          orderTotal: data.orderTotal,
-          discountAmount: data.discountAmount
-        }
+    const existingCoupon = await this.findById(id);
+    if (!existingCoupon) {
+      throw new Error('Coupon not found');
+    }
+
+    return prisma.coupon.delete({ where: { id } });
+  }
+
+  static async validate(
+    code: string,
+    cartTotal: number,
+    customerId?: string | null
+  ): Promise<{ valid: boolean; coupon?: Coupon; error?: string; discount?: number }> {
+    if (!code || typeof code !== 'string') {
+      return { valid: false, error: 'Coupon code is required' };
+    }
+
+    if (typeof cartTotal !== 'number' || isNaN(cartTotal) || cartTotal < 0) {
+      return { valid: false, error: 'Invalid cart total' };
+    }
+
+    const coupon = await this.findByCode(code);
+
+    if (!coupon) {
+      return { valid: false, error: 'Coupon not found' };
+    }
+
+    if (!coupon.isActive) {
+      return { valid: false, error: 'This coupon is no longer active' };
+    }
+
+    if (coupon.expiresAt && new Date(coupon.expiresAt) < new Date()) {
+      return { valid: false, error: 'This coupon has expired' };
+    }
+
+    if (coupon.minPurchase !== null && cartTotal < coupon.minPurchase) {
+      return {
+        valid: false,
+        error: `Minimum purchase of $${coupon.minPurchase.toFixed(2)} required`,
+      };
+    }
+
+    const redemptionCount = coupon._count?.redemptions ?? 0;
+    if (coupon.maxUses !== null && redemptionCount >= coupon.maxUses) {
+      return { valid: false, error: 'This coupon has reached its maximum usage limit' };
+    }
+
+    if (customerId && coupon.maxUsesPerCustomer !== null) {
+      const customerRedemptions = await prisma.redemption.count({
+        where: {
+          couponId: coupon.id,
+          customerId: customerId,
+        },
       });
 
-      // Increment coupon redemption count
-      await tx.coupon.update({
-        where: { id: couponId },
-        data: {
-          currentRedemptions: { increment: 1 },
-          totalRevenue: { increment: data.orderTotal },
-          totalDiscount: { increment: data.discountAmount }
-        }
-      });
+      if (customerRedemptions >= coupon.maxUsesPerCustomer) {
+        return {
+          valid: false,
+          error: 'You have already used this coupon the maximum number of times',
+        };
+      }
+    }
 
-      return redemption;
+    const discount = this.calculateDiscount(coupon as Coupon, cartTotal);
+
+    return {
+      valid: true,
+      coupon: coupon as Coupon,
+      discount,
+    };
+  }
+
+  static calculateDiscount(coupon: Coupon, cartTotal: number): number {
+    if (typeof cartTotal !== 'number' || isNaN(cartTotal) || cartTotal < 0) {
+      return 0;
+    }
+
+    let discount: number;
+
+    if (coupon.type === 'PERCENTAGE') {
+      discount = (cartTotal * Math.min(coupon.value, 100)) / 100;
+    } else {
+      discount = Math.min(coupon.value, cartTotal);
+    }
+
+    return Math.round(discount * 100) / 100;
+  }
+
+  static async recordRedemption(
+    couponId: string,
+    orderId: string,
+    customerId: string | null,
+    discountAmount: number,
+    orderTotal: number
+  ) {
+    if (!couponId || !orderId) {
+      throw new Error('Coupon ID and Order ID are required');
+    }
+
+    if (typeof discountAmount !== 'number' || isNaN(discountAmount)) {
+      throw new Error('Invalid discount amount');
+    }
+
+    if (typeof orderTotal !== 'number' || isNaN(orderTotal)) {
+      throw new Error('Invalid order total');
+    }
+
+    return prisma.redemption.create({
+      data: {
+        couponId,
+        orderId,
+        customerId: customerId || null,
+        discountAmount: Math.abs(discountAmount),
+        orderTotal: Math.abs(orderTotal),
+      },
     });
+  }
+
+  static async getAnalytics(couponId?: string) {
+    const where = couponId ? { couponId } : {};
+
+    const [totalRedemptions, totalDiscount, totalRevenue, recentRedemptions] =
+      await Promise.all([
+        prisma.redemption.count({ where }),
+        prisma.redemption.aggregate({
+          where,
+          _sum: { discountAmount: true },
+        }),
+        prisma.redemption.aggregate({
+          where,
+          _sum: { orderTotal: true },
+        }),
+        prisma.redemption.findMany({
+          where,
+          orderBy: { redeemedAt: 'desc' },
+          take: 10,
+          include: {
+            coupon: {
+              select: { code: true, type: true, value: true },
+            },
+          },
+        }),
+      ]);
+
+    return {
+      totalRedemptions,
+      totalDiscount: totalDiscount._sum.discountAmount ?? 0,
+      totalRevenue: totalRevenue._sum.orderTotal ?? 0,
+      recentRedemptions,
+    };
   }
 }

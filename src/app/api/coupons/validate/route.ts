@@ -1,160 +1,62 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { NextRequest } from 'next/server';
+import { CouponService } from '@/services/coupon.service';
+import { validateCouponSchema, formatValidationErrors, safeParseNumber } from '@/lib/validation';
+import { apiSuccess, apiError, apiValidationError } from '@/lib/api-response';
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { code, cartTotal, customerId } = body;
-
-    if (!code || typeof code !== 'string') {
-      return NextResponse.json(
-        { valid: false, error: 'Coupon code is required' },
-        { status: 400 }
-      );
+    let body: unknown;
+    
+    try {
+      body = await request.json();
+    } catch {
+      return apiError('Invalid JSON in request body', 400);
     }
 
-    const trimmedCode = code.trim().toUpperCase();
-
-    if (trimmedCode.length === 0) {
-      return NextResponse.json(
-        { valid: false, error: 'Coupon code cannot be empty' },
-        { status: 400 }
-      );
+    if (!body || typeof body !== 'object') {
+      return apiError('Request body must be an object', 400);
     }
 
-    if (cartTotal !== undefined && (typeof cartTotal !== 'number' || cartTotal < 0 || isNaN(cartTotal))) {
-      return NextResponse.json(
-        { valid: false, error: 'Invalid cart total' },
-        { status: 400 }
-      );
+    const rawBody = body as Record<string, unknown>;
+    
+    // Pre-process cart total to handle string numbers
+    const processedBody = {
+      ...rawBody,
+      cartTotal: safeParseNumber(rawBody.cartTotal) ?? rawBody.cartTotal,
+    };
+
+    const validationResult = validateCouponSchema.safeParse(processedBody);
+
+    if (!validationResult.success) {
+      return apiValidationError(formatValidationErrors(validationResult.error));
     }
 
-    const coupon = await prisma.coupon.findUnique({
-      where: { code: trimmedCode },
-      include: {
-        redemptions: customerId ? {
-          where: { customerId }
-        } : false
-      }
-    });
+    const { code, cartTotal, customerId } = validationResult.data;
 
-    if (!coupon) {
-      return NextResponse.json(
-        { valid: false, error: 'Coupon not found' },
-        { status: 404 }
-      );
+    const result = await CouponService.validate(code, cartTotal, customerId);
+
+    if (!result.valid) {
+      return apiError(result.error || 'Invalid coupon', 400);
     }
 
-    // Check if coupon is active
-    if (!coupon.isActive) {
-      return NextResponse.json(
-        { valid: false, error: 'This coupon is no longer active' },
-        { status: 400 }
-      );
-    }
-
-    // Check expiration date
-    const now = new Date();
-    if (coupon.expiresAt && new Date(coupon.expiresAt) < now) {
-      return NextResponse.json(
-        { valid: false, error: 'This coupon has expired' },
-        { status: 400 }
-      );
-    }
-
-    // Check start date
-    if (coupon.startsAt && new Date(coupon.startsAt) > now) {
-      return NextResponse.json(
-        { valid: false, error: 'This coupon is not yet valid' },
-        { status: 400 }
-      );
-    }
-
-    // Check usage limit
-    if (coupon.maxRedemptions !== null && coupon.currentRedemptions >= coupon.maxRedemptions) {
-      return NextResponse.json(
-        { valid: false, error: 'This coupon has reached its usage limit' },
-        { status: 400 }
-      );
-    }
-
-    // Check per-customer usage limit
-    if (customerId && coupon.maxRedemptionsPerCustomer !== null) {
-      const customerRedemptions = await prisma.redemption.count({
-        where: {
-          couponId: coupon.id,
-          customerId
-        }
-      });
-
-      if (customerRedemptions >= coupon.maxRedemptionsPerCustomer) {
-        return NextResponse.json(
-          { valid: false, error: 'You have already used this coupon the maximum number of times' },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Check minimum purchase requirement
-    if (cartTotal !== undefined && coupon.minPurchaseAmount !== null) {
-      if (cartTotal < coupon.minPurchaseAmount) {
-        return NextResponse.json(
-          { 
-            valid: false, 
-            error: `Minimum purchase of $${coupon.minPurchaseAmount.toFixed(2)} required`,
-            minPurchaseAmount: coupon.minPurchaseAmount
-          },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Calculate discount
-    let discountAmount = 0;
-    if (cartTotal !== undefined) {
-      if (coupon.discountType === 'PERCENTAGE') {
-        discountAmount = (cartTotal * coupon.discountValue) / 100;
-        // Apply max discount cap if set
-        if (coupon.maxDiscountAmount !== null && discountAmount > coupon.maxDiscountAmount) {
-          discountAmount = coupon.maxDiscountAmount;
-        }
-      } else if (coupon.discountType === 'FIXED_AMOUNT') {
-        discountAmount = Math.min(coupon.discountValue, cartTotal);
-      }
-      // Ensure discount doesn't exceed cart total
-      discountAmount = Math.min(discountAmount, cartTotal);
-      // Round to 2 decimal places
-      discountAmount = Math.round(discountAmount * 100) / 100;
-    }
-
-    return NextResponse.json({
+    return apiSuccess({
       valid: true,
       coupon: {
-        id: coupon.id,
-        code: coupon.code,
-        description: coupon.description,
-        discountType: coupon.discountType,
-        discountValue: coupon.discountValue,
-        minPurchaseAmount: coupon.minPurchaseAmount,
-        maxDiscountAmount: coupon.maxDiscountAmount,
-        expiresAt: coupon.expiresAt
+        code: result.coupon!.code,
+        type: result.coupon!.type,
+        value: result.coupon!.value,
+        description: result.coupon!.description,
       },
-      discountAmount,
-      finalTotal: cartTotal !== undefined ? Math.round((cartTotal - discountAmount) * 100) / 100 : undefined
+      discount: result.discount,
+      finalTotal: Math.max(0, Math.round((cartTotal - (result.discount || 0)) * 100) / 100),
     });
   } catch (error) {
     console.error('Error validating coupon:', error);
     
-    if (error instanceof SyntaxError) {
-      return NextResponse.json(
-        { valid: false, error: 'Invalid request body' },
-        { status: 400 }
-      );
+    if (error instanceof Error) {
+      return apiError(error.message, 500);
     }
     
-    return NextResponse.json(
-      { valid: false, error: 'Failed to validate coupon' },
-      { status: 500 }
-    );
+    return apiError('An unexpected error occurred while validating the coupon', 500);
   }
 }
