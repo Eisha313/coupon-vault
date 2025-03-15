@@ -1,6 +1,5 @@
 export type DiscountType = 'PERCENTAGE' | 'FIXED_AMOUNT';
-
-export type CouponStatus = 'ACTIVE' | 'INACTIVE' | 'EXPIRED';
+export type CouponStatus = 'ACTIVE' | 'INACTIVE' | 'EXPIRED' | 'DEPLETED';
 
 export interface Coupon {
   id: string;
@@ -8,82 +7,41 @@ export interface Coupon {
   description: string | null;
   discountType: DiscountType;
   discountValue: number;
-  minPurchase: number | null;
-  maxDiscount: number | null;
-  usageLimit: number | null;
-  usageCount: number;
-  startsAt: Date | null;
-  expiresAt: Date | null;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
+  minimumPurchase: number | null;
+  maxRedemptions: number | null;
+  currentRedemptions: number;
+  startDate: string;
+  endDate: string | null;
+  status: CouponStatus;
+  stripePromotionId: string | null;
+  stripeCouponId: string | null;
+  metadata: unknown;
+  createdAt: string;
+  updatedAt: string;
+  _count?: { redemptions: number };
 }
 
 export interface Redemption {
   id: string;
   couponId: string;
-  orderId: string;
+  orderId: string | null;
   customerEmail: string | null;
-  orderAmount: number;
-  discountAmount: number;
-  stripePaymentIntentId: string | null;
-  redeemedAt: Date;
+  discountApplied: number;
+  orderTotal: number | null;
+  stripePaymentId: string | null;
+  metadata: unknown;
+  redeemedAt: string;
+  coupon?: {
+    code: string;
+    discountType: DiscountType;
+    discountValue: number;
+  };
 }
 
-export interface CouponWithStats extends Coupon {
-  redemptions: Redemption[];
-  totalRevenue: number;
-  totalDiscountGiven: number;
-}
-
-export interface CreateCouponInput {
+export interface TopCoupon {
+  id: string;
   code: string;
-  description?: string;
-  discountType: DiscountType;
-  discountValue: number;
-  minPurchase?: number;
-  maxDiscount?: number;
-  usageLimit?: number;
-  startsAt?: Date;
-  expiresAt?: Date;
-}
-
-export interface BulkGenerateInput {
-  prefix: string;
-  count: number;
-  discountType: DiscountType;
-  discountValue: number;
-  minPurchase?: number;
-  maxDiscount?: number;
-  usageLimit?: number;
-  expiresAt?: Date;
-}
-
-export interface ValidateCouponInput {
-  code: string;
-  orderAmount: number;
-}
-
-export interface ValidateCouponResult {
-  valid: boolean;
-  coupon?: Coupon;
-  discountAmount?: number;
-  error?: string;
-}
-
-export interface DashboardStats {
-  totalCoupons: number;
-  activeCoupons: number;
-  totalRedemptions: number;
-  totalRevenue: number;
-  totalDiscountGiven: number;
-  redemptionsToday: number;
-  revenueToday: number;
-}
-
-export interface RedemptionAnalytics {
-  date: string;
-  redemptions: number;
-  revenue: number;
-  discountGiven: number;
+  redemptionCount: number;
+  totalDiscount: number;
+  isActive: boolean;
 }
