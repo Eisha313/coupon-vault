@@ -10,26 +10,24 @@ async function getDashboardStats() {
     prisma.coupon.count(),
     prisma.coupon.count({
       where: {
-        isActive: true,
+        status: 'ACTIVE',
         OR: [
-          { expiresAt: null },
-          { expiresAt: { gt: new Date() } }
-        ]
-      }
+          { endDate: null },
+          { endDate: { gt: new Date() } },
+        ],
+      },
     }),
     prisma.redemption.count(),
     prisma.redemption.aggregate({
-      _sum: {
-        discountAmount: true
-      }
-    })
+      _sum: { discountApplied: true },
+    }),
   ]);
 
   return {
     totalCoupons,
     activeCoupons,
     totalRedemptions,
-    revenueImpact: revenueImpact._sum.discountAmount || 0
+    revenueImpact: Number(revenueImpact._sum.discountApplied) || 0,
   };
 }
 
@@ -38,82 +36,54 @@ async function getRedemptionData() {
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
   const redemptions = await prisma.redemption.findMany({
-    where: {
-      redeemedAt: {
-        gte: thirtyDaysAgo
-      }
-    },
-    select: {
-      redeemedAt: true,
-      discountAmount: true
-    },
-    orderBy: {
-      redeemedAt: 'asc'
-    }
+    where: { redeemedAt: { gte: thirtyDaysAgo } },
+    select: { redeemedAt: true, discountApplied: true },
+    orderBy: { redeemedAt: 'asc' },
   });
 
-  // Group by date
-  const grouped = redemptions.reduce((acc, redemption) => {
-    const date = redemption.redeemedAt.toISOString().split('T')[0];
-    if (!acc[date]) {
-      acc[date] = { count: 0, amount: 0 };
-    }
+  const grouped = redemptions.reduce((acc, r) => {
+    const date = r.redeemedAt.toISOString().split('T')[0];
+    if (!acc[date]) acc[date] = { count: 0, amount: 0 };
     acc[date].count++;
-    acc[date].amount += Number(redemption.discountAmount);
+    acc[date].amount += Number(r.discountApplied);
     return acc;
   }, {} as Record<string, { count: number; amount: number }>);
 
   return Object.entries(grouped).map(([date, data]) => ({
     date,
     redemptions: data.count,
-    discountAmount: data.amount
+    discountAmount: data.amount,
   }));
 }
 
 async function getRecentRedemptions() {
   return prisma.redemption.findMany({
     take: 10,
-    orderBy: {
-      redeemedAt: 'desc'
-    },
+    orderBy: { redeemedAt: 'desc' },
     include: {
       coupon: {
-        select: {
-          code: true,
-          discountType: true,
-          discountValue: true
-        }
-      }
-    }
+        select: { code: true, discountType: true, discountValue: true },
+      },
+    },
   });
 }
 
 async function getTopCoupons() {
   const coupons = await prisma.coupon.findMany({
     include: {
-      _count: {
-        select: { redemptions: true }
-      },
-      redemptions: {
-        select: {
-          discountAmount: true
-        }
-      }
+      _count: { select: { redemptions: true } },
+      redemptions: { select: { discountApplied: true } },
     },
-    orderBy: {
-      redemptions: {
-        _count: 'desc'
-      }
-    },
-    take: 5
+    orderBy: { redemptions: { _count: 'desc' } },
+    take: 5,
   });
 
-  return coupons.map(coupon => ({
+  return coupons.map((coupon) => ({
     id: coupon.id,
     code: coupon.code,
     redemptionCount: coupon._count.redemptions,
-    totalDiscount: coupon.redemptions.reduce((sum, r) => sum + Number(r.discountAmount), 0),
-    isActive: coupon.isActive
+    totalDiscount: coupon.redemptions.reduce((sum, r) => sum + Number(r.discountApplied), 0),
+    isActive: coupon.status === 'ACTIVE',
   }));
 }
 
@@ -122,7 +92,7 @@ export default async function DashboardPage() {
     getDashboardStats(),
     getRedemptionData(),
     getRecentRedemptions(),
-    getTopCoupons()
+    getTopCoupons(),
   ]);
 
   return (
@@ -137,7 +107,6 @@ export default async function DashboardPage() {
           title="Total Coupons"
           value={stats.totalCoupons}
           icon="ticket"
-          trend={{ value: 12, isPositive: true }}
         />
         <StatsCard
           title="Active Coupons"
